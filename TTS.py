@@ -375,7 +375,10 @@ class CatalanTTSModel:
                 self.reset_model()
                 consecutive_bad_epochs = 0
                 continue
-            
+            # Save checkpoint and plots every epoch
+            if epoch % 10 == 0:  # Save every epoch
+                if not self.save_checkpoint(epoch, avg_loss, is_best):
+                    logger.warning(f"Failed to save checkpoint for epoch {epoch}")
             # Update learning rate
             self.scheduler.step(avg_loss)
             
@@ -415,8 +418,16 @@ class CatalanTTSModel:
                 outputs = self.model(**inputs)
                 speech = outputs.waveform.squeeze().cpu().numpy()
 
+            # Ensure the audio is in the correct format (float32)
+            speech = speech.astype(np.float32)
+
+            # Check if the generated audio is empty
+            if speech.size == 0:
+                logger.error("Generated audio is empty.")
+                raise ValueError("Generated audio is empty.")
+
             # Save the audio file
-            sf.write(output_path, speech, samplerate=16000)
+            sf.write(output_path, speech, samplerate=16000, format='WAV')  # Specify format explicitly
             logger.info(f"Generated speech saved to {output_path}")
 
             return speech
@@ -943,5 +954,3 @@ if __name__ == "__main__":
     
     # Generate full report
     report_dir = model.generate_comprehensive_report()
-    
-    
