@@ -1,0 +1,7 @@
+{
+    "total_epochs": 10,
+    "best_loss": 0.1233610443278866,
+    "final_loss": 0.1321859432278939,
+    "improvement": -7.153716108750851,
+    "training_duration": 1.789143690277778
+}
