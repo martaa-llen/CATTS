@@ -1,3 +1,4 @@
+#import packages
 import os
 import torch
 import torchaudio
@@ -19,7 +20,7 @@ import numpy as np
 import seaborn as sns
 
 
-# Setup logging
+#setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger()
 
@@ -28,19 +29,19 @@ def split_batch(waveforms, transcriptions, speaker_genders):
     """
     Split batch into support and query sets while maintaining gender balance
     """
-    # Separate male and female samples
+    #separate male and female samples
     male_indices = [i for i, gender in enumerate(speaker_genders) if gender == "male"]
     female_indices = [i for i, gender in enumerate(speaker_genders) if gender == "female"]
     
-    # Ensure balanced split for each gender
+    #balanced split for each gender
     male_split = len(male_indices) // 2
     female_split = len(female_indices) // 2
     
-    # Create support and query sets with gender balance
+    #create support and query sets with gender balance
     support_indices = male_indices[:male_split] + female_indices[:female_split]
     query_indices = male_indices[male_split:] + female_indices[female_split:]
     
-    # Create support and query sets
+    #create support and query sets
     support_waveforms = torch.stack([waveforms[i] for i in support_indices])
     support_transcriptions = [transcriptions[i] for i in support_indices]
     support_genders = [speaker_genders[i] for i in support_indices]
@@ -61,14 +62,14 @@ class CatalanTTSModel:
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
         logger.info(f"Using device: {self.device}")
         
-        # Load pre-trained model and processor
+        #load pre-trained model and processor
         self.processor = AutoProcessor.from_pretrained(pretrained_model_name)
         self.model = VitsModel.from_pretrained(pretrained_model_name).to(self.device)
         
-        # Print model configuration for debugging
+        #model configuration 
         print("Model config:", self.model.config)
         
-        # Add training history tracking
+        #training history tracking
         self.training_history = {
             'epoch_losses': [],
             'batch_losses': [],
@@ -76,13 +77,13 @@ class CatalanTTSModel:
             'model_config': self.model.config.to_dict()
         }
         
-        # Create output directory with timestamp
+        #output directory with timestamp
         self.timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         self.output_dir = f"tts_output_{self.timestamp}"
         os.makedirs(self.output_dir, exist_ok=True)
         
-        # Initialize with better learning rates and optimizer
-        self.meta_learning_rate = 1e-4  # Reduced from previous value
+        #initialize lr and optimizer
+        self.meta_learning_rate = 1e-4  #reduced from previous value
         self.meta_optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=1e-4,
@@ -91,7 +92,7 @@ class CatalanTTSModel:
             eps=1e-8
         )
         
-        # Add learning rate scheduler
+        #lr scheduler
         self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             self.meta_optimizer,
             mode='min',
@@ -109,7 +110,7 @@ class CatalanTTSModel:
             batch_size=8,
             shuffle=True,
             num_workers=4,
-            collate_fn=pad_collate_fn  # Use the custom collate function
+            collate_fn=pad_collate_fn  #custom collate function
         )
         return self.train_loader
 
@@ -120,9 +121,9 @@ class CatalanTTSModel:
         waveforms, transcriptions, speaker_genders = batch
         
         try:
-            # Process text inputs in smaller chunks if needed
+            #process text inputs in smaller chunks to reduce memory usage
             batch_size = len(transcriptions)
-            chunk_size = 2  # Process 2 samples at a time
+            chunk_size = 2  #process 2 samples at a time
             total_loss = 0
             
             for i in range(0, batch_size, chunk_size):
@@ -130,56 +131,53 @@ class CatalanTTSModel:
                 chunk_transcriptions = transcriptions[i:chunk_end]
                 chunk_waveforms = waveforms[i:chunk_end]
                 
-                # Clear cache periodically
+                #clear cache periodically
                 if i % (chunk_size * 2) == 0:
                     torch.cuda.empty_cache()
                 
-                # Process text inputs
+                #process text inputs
                 inputs = self.processor(
                     text=chunk_transcriptions,
                     return_tensors="pt",
                     padding=True
                 ).to(self.device)
                 
-                # Forward pass
+                #forward pass
                 outputs = self.model(**inputs)
                 predicted_waveforms = outputs.waveform
                 
-                # Ensure target waveforms are on the correct device
                 target_waveforms = chunk_waveforms.to(self.device)
                 
-                # Get minimum length between predicted and target
+                #min length between predicted and target
                 min_length = min(predicted_waveforms.size(-1), target_waveforms.size(-1))
                 
-                # Truncate both to the minimum length
+                #truncate both to the min length
                 predicted_waveforms = predicted_waveforms[..., :min_length]
                 target_waveforms = target_waveforms[..., :min_length]
                 
-                # Normalize waveforms
+                #normalize waveforms
                 predicted_waveforms = predicted_waveforms / (torch.max(torch.abs(predicted_waveforms)) + 1e-7)
                 target_waveforms = target_waveforms / (torch.max(torch.abs(target_waveforms)) + 1e-7)
                 
-                # Log shapes for debugging
                 logger.debug(f"Predicted shape after truncation: {predicted_waveforms.shape}")
                 logger.debug(f"Target shape after truncation: {target_waveforms.shape}")
                 
-                # Compute L1 loss with matched shapes
+                #L1 loss with matched shapes
                 loss = F.l1_loss(
                     predicted_waveforms.view(predicted_waveforms.shape[0], -1),
                     target_waveforms.view(target_waveforms.shape[0], -1)
                 )
                 
-                # Add regularization term
+                #regularization term
                 l2_lambda = 1e-6
                 l2_reg = torch.tensor(0., device=self.device)
                 for param in self.model.parameters():
                     l2_reg += torch.norm(param)
                 loss += l2_lambda * l2_reg
                 
-                # Clip loss value
+                #clip loss value
                 loss = torch.clamp(loss, 0.0, 10.0)
                 
-                # Free memory explicitly
                 del outputs
                 torch.cuda.empty_cache()
                 
@@ -198,27 +196,27 @@ class CatalanTTSModel:
         waveforms, transcriptions, speaker_genders = batch
         
         try:
-            # Process text inputs to get expected output length
+            #process text inputs to get expected output length
             inputs = self.processor(
                 text=transcriptions,
                 return_tensors="pt",
                 padding=True
             )
             
-            # Get model's expected output length
+            #model's expected output length
             with torch.no_grad():
                 test_outputs = self.model(**inputs.to(self.device))
                 expected_length = test_outputs.waveform.size(-1)
             
-            # Pad or truncate waveforms to match expected length
+            #pad/truncate waveforms --> match expected length
             processed_waveforms = []
             for waveform in waveforms:
                 if waveform.size(-1) < expected_length:
-                    # Pad if too short
+                    #pad if too short
                     padding = torch.zeros(expected_length - waveform.size(-1))
                     waveform = torch.cat([waveform, padding])
                 else:
-                    # Truncate if too long
+                    #truncate if too long
                     waveform = waveform[:expected_length]
                 processed_waveforms.append(waveform)
             
@@ -241,16 +239,15 @@ class CatalanTTSModel:
             support_set = self.prepare_batch(support_set)
             query_set = self.prepare_batch(query_set)
             
-            # Separate losses by gender for monitoring
+            #losses by gender 
             support_loss_male = 0
             support_loss_female = 0
             query_loss_male = 0
             query_loss_female = 0
             
-            # Inner loop (support set)
-            support_loss = self.compute_loss(support_set)
+            support_loss = self.compute_loss(support_set) #inner loop (support set)
             
-            # Track gender-specific losses
+            #track gender-specific losses for support set
             waveforms, _, genders = support_set
             male_mask = torch.tensor([g == "male" for g in genders]).to(self.device)
             female_mask = torch.tensor([g == "female" for g in genders]).to(self.device)
@@ -260,10 +257,8 @@ class CatalanTTSModel:
             if female_mask.any():
                 support_loss_female = support_loss * female_mask.float().mean()
             
-            # Clip gradients for support set
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_grad_norm)
             
-            # Compute and apply gradients
             grads = torch.autograd.grad(
                 support_loss, 
                 [p for p in self.model.parameters() if p.requires_grad],
@@ -271,15 +266,14 @@ class CatalanTTSModel:
                 allow_unused=True
             )
             
-            # Update adapted parameters
+            #update adapted parameters
             for param, grad in zip([p for p in self.model.parameters() if p.requires_grad], grads):
                 if grad is not None:
                     param.data = param.data - self.meta_learning_rate * torch.clamp(grad, -1.0, 1.0)
             
-            # Outer loop (query set)
-            query_loss = self.compute_loss(query_set)
+            query_loss = self.compute_loss(query_set) #outer loop (query set)
             
-            # Track gender-specific losses for query set
+            #gender-specific losses for query set
             waveforms, _, genders = query_set
             male_mask = torch.tensor([g == "male" for g in genders]).to(self.device)
             female_mask = torch.tensor([g == "female" for g in genders]).to(self.device)
@@ -289,13 +283,12 @@ class CatalanTTSModel:
             if female_mask.any():
                 query_loss_female = query_loss * female_mask.float().mean()
             
-            # Optimize
+            #optimize
             self.meta_optimizer.zero_grad()
             query_loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_grad_norm)
             self.meta_optimizer.step()
             
-            # Log gender-specific losses
             logger.debug(f"Support losses - Male: {support_loss_male:.4f}, Female: {support_loss_female:.4f}")
             logger.debug(f"Query losses - Male: {query_loss_male:.4f}, Female: {query_loss_female:.4f}")
             
@@ -316,10 +309,10 @@ class CatalanTTSModel:
         """
         logger.info("Starting fine-tuning process...")
         
-        # Clear memory before starting
+        #clear memory at start
         torch.cuda.empty_cache()
         
-        # Reduce memory usage for training history
+        #reduce memory usage for training history
         self.training_history = {
             'epoch_losses': [],
             'batch_losses': [],
@@ -330,26 +323,25 @@ class CatalanTTSModel:
         best_loss = float('inf')
         
         for epoch in range(num_epochs):
-            # Clear memory at start of each epoch
+            #clear memory at start of each epoch
             torch.cuda.empty_cache()
             
             epoch_loss = 0
             batch_losses = []
             
             for batch_idx, batch in enumerate(self.train_loader):
-                # Split batch into support and query sets
                 support_set, query_set = split_batch(*batch)
                 
-                # Perform meta-learning step
+                #meta-learning step
                 loss = self.meta_train_step(support_set, query_set)
                 epoch_loss += loss
                 batch_losses.append(loss)
                 
-                # Log batch progress
+                #batch progress
                 if batch_idx % 10 == 0:
                     logger.info(f"Epoch {epoch}, Batch {batch_idx}, Loss: {loss:.4f}")
             
-            # Calculate and store epoch metrics
+            #metrics
             avg_loss = epoch_loss / len(self.train_loader)
             self.training_history['epoch_losses'].append(avg_loss)
             self.training_history['batch_losses'].extend(batch_losses)
@@ -357,47 +349,43 @@ class CatalanTTSModel:
             
             logger.info(f"Epoch {epoch} completed. Average Loss: {avg_loss:.4f}")
             
-            # Check if this is the best model so far
+            #check if this is the best model so far
             is_best = avg_loss < best_loss
             if is_best:
                 best_loss = avg_loss
                 logger.info(f"New best model achieved with loss: {best_loss:.4f}")
             
-            # Check for bad training
-            if avg_loss > 0.9:  # Loss is suspiciously high
+            #bad training ? loss too high?
+            if avg_loss > 0.9:  
                 consecutive_bad_epochs += 1
             else:
                 consecutive_bad_epochs = 0
             
-            # Restart training if necessary
+            #restart training if necessary
             if consecutive_bad_epochs >= 3:
                 logger.warning("Loss stuck at high value. Restarting training...")
                 self.reset_model()
                 consecutive_bad_epochs = 0
                 continue
-            # Save checkpoint and plots every epoch
-            if epoch % 10 == 0:  # Save every epoch
+            
+            if epoch % 10 == 0:  
                 if not self.save_checkpoint(epoch, avg_loss, is_best):
                     logger.warning(f"Failed to save checkpoint for epoch {epoch}")
-            # Update learning rate
-            self.scheduler.step(avg_loss)
             
-            # Generate example audio every epoch
+            self.scheduler.step(avg_loss) #update learning rate
+            
+            #example audio 
             logger.info(f"Generating example audio for epoch {epoch}")
             self.generate_example_audio(epoch, batch_idx)
             
-            # Save checkpoint and plots
-            if epoch % 5 == 0:  # Save every 5 epochs instead of every epoch
+            if epoch % 5 == 0:  
+                self.generate_example_audio(epoch, batch_idx)
+                self.plot_training_history()
                 if not self.save_checkpoint(epoch, avg_loss, is_best):
                     logger.warning(f"Failed to save checkpoint for epoch {epoch}")
             
-            if epoch % 5 == 0:  # Generate examples every 5 epochs
-                self.generate_example_audio(epoch, batch_idx)
-            
-            if epoch % 5 == 0:  # Plot every 5 epochs
-                self.plot_training_history()
-            
-            # Save training history to JSON with error handling
+                      
+            #training history to JSON with error handling
             try:
                 history_path = os.path.join(self.output_dir, 'training_history.json')
                 with open(history_path, 'w') as f:
@@ -410,23 +398,22 @@ class CatalanTTSModel:
         Generate speech from text input
         """
         try:
-            # Prepare input
             inputs = self.processor(text=text, return_tensors="pt").to(self.device)
 
-            # Generate speech using the forward pass
+            #generate speech (forward pass)
             with torch.no_grad():
                 outputs = self.model(**inputs)
                 speech = outputs.waveform.squeeze().cpu().numpy()
 
-            # Ensure the audio is in the correct format (float32)
+            #correct format (float32) audio
             speech = speech.astype(np.float32)
 
-            # Check if the generated audio is empty
+            #empty audio?
             if speech.size == 0:
                 logger.error("Generated audio is empty.")
                 raise ValueError("Generated audio is empty.")
 
-            # Save the audio file
+            #save audio
             sf.write(output_path, speech, samplerate=16000, format='WAV')  # Specify format explicitly
             logger.info(f"Generated speech saved to {output_path}")
 
@@ -436,24 +423,25 @@ class CatalanTTSModel:
             logger.error(f"Error generating speech: {str(e)}")
             raise
 
+
+
     def save_checkpoint(self, epoch, loss, is_best=False):
         """
-        Save model checkpoint with metadata and error handling
+        #Save model checkpoint with metadata and error handling
         """
         try:
-            # First verify write permissions and disk space
+            #write permissions and disk space check
             checkpoint_dir = os.path.dirname(self.output_dir)
             if not os.access(checkpoint_dir, os.W_OK):
                 logger.error(f"No write permission for directory: {checkpoint_dir}")
                 return False
             
-            # Check available disk space (require at least 1GB)
             free_space = shutil.disk_usage(checkpoint_dir).free
-            if free_space < 1_000_000_000:  # 1GB in bytes
+            if free_space < 1_000_000_000:  #1GB
                 logger.error(f"Insufficient disk space. Available: {free_space / 1_000_000_000:.2f}GB")
                 return False
 
-            # Create checkpoint data
+            #checkpoint data
             checkpoint = {
                 'epoch': epoch,
                 'model_state_dict': self.model.state_dict(),
@@ -469,12 +457,12 @@ class CatalanTTSModel:
                 f'checkpoint_epoch_{epoch}.pth'
             )
             
-            # Save to temporary file first
+            #temporary file 
             temp_path = checkpoint_path + '.tmp'
             torch.save(checkpoint, temp_path)
             os.replace(temp_path, checkpoint_path)
             
-            # If this is the best model, save it separately
+            #save best model
             if is_best:
                 best_model_path = os.path.join(self.output_dir, 'best_model.pth')
                 best_temp_path = best_model_path + '.tmp'
@@ -487,7 +475,7 @@ class CatalanTTSModel:
 
         except Exception as e:
             logger.error(f"Error saving checkpoint: {str(e)}")
-            # Clean up temporary files if they exist
+            #clean up temporary files
             for temp_file in [temp_path, best_temp_path]:
                 if 'temp_file' in locals() and os.path.exists(temp_file):
                     try:
@@ -495,7 +483,7 @@ class CatalanTTSModel:
                     except:
                         pass
             return False
-
+    
     def load_checkpoint(self, path):
         """
         Load model checkpoint
@@ -510,49 +498,45 @@ class CatalanTTSModel:
         """
         plt.figure(figsize=(12, 6))
         
-        # Convert to numpy array if it's a torch tensor
         if torch.is_tensor(waveform):
             waveform = waveform.squeeze().cpu().numpy()
         else:
             waveform = np.asarray(waveform).squeeze()
         
-        # Generate mel spectrogram with improved parameters
+        #generate mel spectrogram with improved parameters
         spectrogram = librosa.feature.melspectrogram(
             y=waveform,
             sr=16000,
-            n_mels=128,  # Increased for better resolution
+            n_mels=128,  
             fmax=8000,
             n_fft=2048,
             hop_length=512
         )
         
-        # Convert to log scale
-        spectrogram_db = librosa.power_to_db(spectrogram, ref=np.max)
+        spectrogram_db = librosa.power_to_db(spectrogram, ref=np.max) #convert to log scale
         
-        # Plot spectrogram with enhanced visualization
+        #plot spectrogram 
         img = librosa.display.specshow(
             spectrogram_db,
             y_axis='mel',
             x_axis='time',
             sr=16000,
             fmax=8000,
-            cmap='magma'  # Using a perceptually uniform colormap
+            cmap='magma'  
         )
         
-        # Add colorbar with proper formatting
+        #colorbar with proper formatting
         cbar = plt.colorbar(img, format='%+2.0f dB')
         cbar.set_label('Intensity (dB)', rotation=270, labelpad=15)
         
-        # Enhance plot aesthetics
         plt.title(title, fontsize=14, pad=20)
         plt.xlabel('Time (s)', fontsize=12)
         plt.ylabel('Frequency (Hz)', fontsize=12)
         
-        # Add grid for better readability
         plt.grid(True, alpha=0.3, linestyle='--')
         
         if save_path:
-            # Save in multiple formats for different use cases
+            #save in multiple formats 
             base_path = os.path.splitext(save_path)[0]
             for format in ['png', 'pdf']:
                 full_path = f"{base_path}.{format}"
@@ -571,26 +555,23 @@ class CatalanTTSModel:
         Create detailed, publication-quality training visualization plots
         """
         try:
-            # Skip plotting if there's not enough data
+            #not enough data --> skip
             if len(self.training_history['epoch_losses']) < 2:
                 logger.warning("Not enough data to plot training history")
                 return
             
             plt.style.use('seaborn-v0_8-darkgrid')
             
-            # Create a figure with multiple subplots
             fig = plt.figure(figsize=(15, 10))
             gs = fig.add_gridspec(2, 2)
             
-            # 1. Epoch Loss Plot (smoothed and raw)
+            #1. Epoch Loss Plot
             ax1 = fig.add_subplot(gs[0, 0])
             epoch_losses = np.array(self.training_history['epoch_losses'])
-            epochs = np.arange(len(epoch_losses))  # Create matching x-axis array
+            epochs = np.arange(len(epoch_losses))  
             
-            # Plot raw data
             ax1.plot(epochs, epoch_losses, 'lightgray', label='Raw Loss', alpha=0.3)
             
-            # Plot smoothed data if enough points
             window_size = min(5, len(epoch_losses) // 2)
             if window_size > 1:
                 smoothed_losses = np.convolve(epoch_losses, np.ones(window_size)/window_size, mode='valid')
@@ -603,15 +584,13 @@ class CatalanTTSModel:
             ax1.legend()
             ax1.grid(True, linestyle='--', alpha=0.7)
             
-            # 2. Batch Loss Plot with Moving Average
+            #2. Batch Loss Plot with Moving Average
             ax2 = fig.add_subplot(gs[0, 1])
             batch_losses = np.array(self.training_history['batch_losses'])
             batches = np.arange(len(batch_losses))
             
-            # Plot raw batch data
             ax2.plot(batches, batch_losses, 'lightgray', label='Raw Batch Loss', alpha=0.3)
             
-            # Calculate and plot moving average if enough points
             window_size = min(50, len(batch_losses) // 4)
             if window_size > 1:
                 moving_avg = np.convolve(batch_losses, np.ones(window_size)/window_size, mode='valid')
@@ -624,14 +603,14 @@ class CatalanTTSModel:
             ax2.legend()
             ax2.grid(True, linestyle='--', alpha=0.7)
             
-            # 3. Loss Distribution Plot
+            #3. Loss Distribution Plot
             ax3 = fig.add_subplot(gs[1, 0])
             sns.histplot(data=epoch_losses, bins=min(30, len(epoch_losses)), kde=True, ax=ax3)
             ax3.set_title('Loss Distribution', fontsize=12, pad=10)
             ax3.set_xlabel('Loss Value', fontsize=10)
             ax3.set_ylabel('Frequency', fontsize=10)
             
-            # 4. Learning Rate Plot
+            #4. Learning Rate Plot
             ax4 = fig.add_subplot(gs[1, 1])
             if hasattr(self, 'learning_rates') and len(self.learning_rates) > 0:
                 lr_history = self.learning_rates
@@ -642,14 +621,13 @@ class CatalanTTSModel:
                 ax4.set_yscale('log')
                 ax4.grid(True, linestyle='--', alpha=0.7)
             
-            # Add timestamp and model info
+            #timestamp and model info
             plt.figtext(0.02, 0.02, f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}', 
                         fontsize=8, style='italic')
             
-            # Adjust layout and save
             plt.tight_layout()
             
-            # Save plots
+            #save plots
             try:
                 for format in ['png', 'pdf']:
                     save_path = os.path.join(self.output_dir, f'training_analysis.{format}')
@@ -662,7 +640,6 @@ class CatalanTTSModel:
 
         except Exception as e:
             logger.error(f"Error in plot_training_history: {str(e)}")
-            # Ensure we close any open figures to prevent memory leaks
             try:
                 plt.close()
             except:
@@ -674,12 +651,12 @@ class CatalanTTSModel:
         """
         if texts is None:
             texts = [
-                "Hola, com estàs?",  # Hello, how are you?
-                "Barcelona és una ciutat bonica.",  # Barcelona is a beautiful city
-                "M'agrada molt la música catalana."  # I really like Catalan music
+                "Hola, com estàs?",  #Hello, how are you?
+                "Barcelona és una ciutat bonica.",  #Barcelona is a beautiful city
+                "M'agrada molt la música catalana."  #I really like Catalan music
             ]
         
-        example_dir = os.path.join(self.output_dir, f"examples_epoch_{epoch}")  # Simplified directory name
+        example_dir = os.path.join(self.output_dir, f"examples_epoch_{epoch}")  
         os.makedirs(example_dir, exist_ok=True)
         
         try:
@@ -689,11 +666,11 @@ class CatalanTTSModel:
                 waveform = self.generate_speech(text, output_path)
                 
                 if waveform is not None:
-                    # Generate and save spectrogram
+                    #generate and save spectrogram
                     spec_path = os.path.join(example_dir, f"sample_{idx}_spec.png")
                     self.plot_spectrogram(
                         waveform,
-                        title=f"Spectrogram - Epoch {epoch} - {text}",  # Added text to title
+                        title=f"Spectrogram - Epoch {epoch} - {text}",  
                         save_path=spec_path
                     )
                     logger.info(f"Generated audio and spectrogram for text: {text}")
@@ -702,7 +679,7 @@ class CatalanTTSModel:
         
         except Exception as e:
             logger.error(f"Error in generate_example_audio: {str(e)}")
-            # Continue training even if example generation fails
+            #continue training even if example generation fails
             pass
 
     @classmethod
@@ -713,42 +690,39 @@ class CatalanTTSModel:
         try:
             logger.info("Loading checkpoint...")
             
-            # Explicitly map to CPU
             checkpoint = torch.load(
                 checkpoint_path,
-                map_location='cpu',  # Force CPU mapping
-                weights_only=True    # Address the FutureWarning
+                map_location='cpu',  
+                weights_only=True    
             )
             
-            # Initialize model on CPU
             model = cls(device='cpu')
             
-            # Load state dictionaries
+            #load state dictionaries
             try:
-                # Handle different checkpoint formats
+                #different checkpoint formats
                 if isinstance(checkpoint, dict):
                     if 'model_state_dict' in checkpoint:
                         model.model.load_state_dict(checkpoint['model_state_dict'])
                     else:
-                        # If the checkpoint is just the model state
+                        #checkpoint--> model state
                         model.model.load_state_dict(checkpoint)
                     
-                    # Load optimizer state if available
+                    #load optimizer state
                     if 'optimizer_state_dict' in checkpoint:
                         model.meta_optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
                     
-                    # Load training history if available
+                    #load training history 
                     if 'training_history' in checkpoint:
                         model.training_history = checkpoint['training_history']
                 else:
-                    # If checkpoint is just the model state
+                    #checkpoint --> model state
                     model.model.load_state_dict(checkpoint)
             
             except Exception as e:
                 logger.error(f"Error loading state dictionaries: {str(e)}")
                 raise
             
-            # Ensure model is in eval mode
             model.model.eval()
             
             logger.info(f"Successfully loaded checkpoint from {checkpoint_path}")
@@ -765,10 +739,10 @@ class CatalanTTSModel:
         try:
             logger.info("Resetting model and optimizer states...")
             
-            # Re-initialize model weights
+            #reinitialize model weights
             self.model = VitsModel.from_pretrained("facebook/mms-tts-spa").to(self.device)
             
-            # Reset optimizer with initial learning rate
+            #reset optimizer with initial learning rate
             self.meta_optimizer = torch.optim.AdamW(
                 self.model.parameters(),
                 lr=1e-4,
@@ -777,7 +751,7 @@ class CatalanTTSModel:
                 eps=1e-8
             )
             
-            # Reset scheduler
+            #reset scheduler
             self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
                 self.meta_optimizer,
                 mode='min',
@@ -786,7 +760,7 @@ class CatalanTTSModel:
                 verbose=True
             )
             
-            # Clear previous loss history
+            #clear previous loss history
             self.previous_valid_loss = None
             
             logger.info("Model and optimizer successfully reset")
@@ -802,7 +776,7 @@ class CatalanTTSModel:
         report_dir = os.path.join(self.output_dir, 'analysis_report')
         os.makedirs(report_dir, exist_ok=True)
         
-        # 1. Training Statistics
+        #1. Training Statistics
         stats = {
             'total_epochs': len(self.training_history['epoch_losses']),
             'best_loss': min(self.training_history['epoch_losses']),
@@ -813,21 +787,19 @@ class CatalanTTSModel:
             'training_duration': (
                 datetime.fromisoformat(self.training_history['timestamps'][-1]) -
                 datetime.fromisoformat(self.training_history['timestamps'][0])
-            ).total_seconds() / 3600  # Convert to hours
+            ).total_seconds() / 3600  
         }
         
-        # Save statistics
         with open(os.path.join(report_dir, 'training_stats.json'), 'w') as f:
             json.dump(stats, f, indent=4)
         
-        # 2. Generate Loss Analysis Plots
-        self.plot_training_history()  # This will save the plots
+        #2. Generate Loss Analysis Plots
+        self.plot_training_history() 
         
-        # 3. Generate Learning Curve Analysis
+        #3. Generate Learning Curve Analysis
         plt.figure(figsize=(12, 6))
         epochs = range(len(self.training_history['epoch_losses']))
         
-        # Plot learning curve with confidence intervals
         losses = np.array(self.training_history['epoch_losses'])
         window = min(50, len(losses) // 10)
         rolling_mean = pd.Series(losses).rolling(window=window).mean()
@@ -845,7 +817,6 @@ class CatalanTTSModel:
         plt.legend()
         plt.grid(True, linestyle='--', alpha=0.7)
         
-        # Save learning curve analysis
         plt.savefig(os.path.join(report_dir, 'learning_curve_analysis.pdf'),
                     dpi=300, bbox_inches='tight')
         plt.close()
@@ -864,7 +835,7 @@ def create_combined_dataset(data_dir):
             self.transcriptions = []
             self.speaker_genders = []
 
-            # Process female data
+            #female data
             female_dir = os.path.join(root_dir, 'female')
             print(f"Processing female directory: {female_dir}")
 
@@ -875,12 +846,12 @@ def create_combined_dataset(data_dir):
                         wav_path = os.path.join(root, file)
                         female_wavs.append(wav_path)
                         self.audio_files.append(wav_path)
-                        self.transcriptions.append("Placeholder text")  # We'll update this later
+                        self.transcriptions.append("Placeholder text")  
                         self.speaker_genders.append("female")
 
             print(f"Found {len(female_wavs)} female audio files")
 
-            # Process male data similarly
+            #male data 
             male_dir = os.path.join(root_dir, 'male')
             print(f"Processing male directory: {male_dir}")
 
@@ -891,7 +862,7 @@ def create_combined_dataset(data_dir):
                         wav_path = os.path.join(root, file)
                         male_wavs.append(wav_path)
                         self.audio_files.append(wav_path)
-                        self.transcriptions.append("Placeholder text")  # We'll update this later
+                        self.transcriptions.append("Placeholder text")  
                         self.speaker_genders.append("male")
 
             print(f"Found {len(male_wavs)} male audio files")
@@ -911,7 +882,6 @@ def create_combined_dataset(data_dir):
                 print(f"Error loading file {self.audio_files[idx]}: {str(e)}")
                 raise
 
-    # Create and return the dataset
     return CatalanDataset(data_dir)
 
 
@@ -922,35 +892,26 @@ def pad_collate_fn(batch):
     """
     waveforms, transcriptions, speaker_genders = zip(*batch)
     
-    # Find the maximum length in the batch
+    #max length in the batch
     max_length = max(waveform.size(1) for waveform in waveforms)
     
-    # Pad each waveform to the maximum length
-    padded_waveforms = [F.pad(waveform, (0, max_length - waveform.size(1))) for waveform in waveforms]
+    padded_waveforms = [F.pad(waveform, (0, max_length - waveform.size(1))) for waveform in waveforms]  #pad each waveform to max length
     
-    # Stack the padded waveforms into a single tensor
-    padded_waveforms = torch.stack(padded_waveforms)
+    padded_waveforms = torch.stack(padded_waveforms) 
     
     return padded_waveforms, list(transcriptions), list(speaker_genders)
     
     
     
 if __name__ == "__main__":
-    # Initialize the model
-    model = CatalanTTSModel()
+    model = CatalanTTSModel() #init model
     
-    # Create dataset
-    data_dir ="/export/fhome/amlai04/data2/" # Replace with your actual data directory
+    data_dir ="./CATTS/data/"
     combined_dataset = create_combined_dataset(data_dir)
     
-    # Prepare dataset
-    model.prepare_catalan_dataset(combined_dataset)
+    model.prepare_catalan_dataset(combined_dataset) #prepare dataset
     
-    # Start training
-    model.finetune()
-    # During or after training
-    model.plot_training_history()  # Creates detailed training plots
+    model.finetune() #start training
+    model.plot_training_history()  #training plots
 
-    
-    # Generate full report
     report_dir = model.generate_comprehensive_report()
